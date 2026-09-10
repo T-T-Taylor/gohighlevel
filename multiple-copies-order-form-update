@@ -1,0 +1,201 @@
+<script>
+/* =====================================================================
+   TONIOLI — ORDER FORM ENHANCER v3.2 (EMBED copy — keep the script tags)
+   Fix vs v3.1: boots only AFTER the page fully loads, so it can never
+   interfere with the funnel app's startup. Step 1 stays untouched,
+   which keeps "Go To Step #2" working normally.
+   ===================================================================== */
+(function () {
+  'use strict';
+  if (window.__tonioliV3) { console.warn('[tonioli] duplicate embed skipped \u2014 keep exactly ONE copy on the page'); return; }
+  window.__tonioliV3 = true;
+
+  var booted = false;
+  function safeBoot(){
+    if (booted) return;
+    booted = true;
+    try { run(); }
+    catch (e) { console.error('[tonioli] startup error:', e); }
+  }
+
+  function run(){
+    /* CONFIG — flip DEBUG to false once verified */
+    var DEBUG          = true;
+    var POPULAR_QTY    = 3;
+    var BADGE_TEXT     = '\u2605 Most Popular';
+    var SINGLE_PRICE   = 19.95;
+    var PRICE_FALLBACK = { 1: 19.95, 2: 39.90, 3: 42.95, 5: 99.75, 10: 120 };
+
+    var rows = [], popular = null, userPicked = false, selecting = false;
+    var timer = null, dumped = false, attempts = 0;
+
+    function log(){ if (DEBUG && window.console) console.log.apply(console, ['[tonioli]'].concat([].slice.call(arguments))); }
+    function money(n){ return '$' + n.toFixed(2); }
+    function isBump(el){ return !!(el && el.closest && el.closest('.order-bump-container,[class*="bump"]')); }
+
+    function cleanText(el){
+      var c = el.cloneNode(true);
+      try { var j = c.querySelectorAll('.tonioli-percopy,.tonioli-popular-badge');
+        for (var i = 0; i < j.length; i++) if (j[i].parentNode) j[i].parentNode.removeChild(j[i]);
+      } catch (e) {}
+      return (c.textContent || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function rowOf(input){
+      var row = input, el = input.parentElement, hops = 0;
+      while (el && hops < 12){
+        if (el.classList && el.classList.contains('container-order-form-two-step')) break;
+        if (el.querySelectorAll('input[type=checkbox],input[type=radio]').length > 1) break;
+        row = el; el = el.parentElement; hops++;
+      }
+      return row;
+    }
+
+    function discover(){
+      rows = []; popular = null;
+      var scopes = document.querySelectorAll('.container-order-form-two-step');
+      for (var s = 0; s < scopes.length; s++){
+        var inputs = scopes[s].querySelectorAll('input[type=checkbox],input[type=radio]');
+        for (var i = 0; i < inputs.length; i++){
+          var input = inputs[i];
+          if (isBump(input)) continue;
+          var row = rowOf(input);
+          var text = cleanText(row);
+          if (!/Easier\s+Christmas/i.test(text)) continue;
+          var qty = parseInt((text.match(/(\d+)\s*Copies/i) || [0, 1])[1], 10);
+          var pm = text.match(/\$\s*([0-9]+(?:\.[0-9]{1,2})?)/);
+          var price = pm ? parseFloat(pm[1]) : (PRICE_FALLBACK[qty] || null);
+          var dup = false;
+          for (var r = 0; r < rows.length; r++) if (rows[r].row === row) { dup = true; break; }
+          if (!dup) rows.push({ input: input, row: row, qty: qty, price: price });
+        }
+      }
+      if (rows.length) log('offers found:', rows.map(function (r) { return r.qty + 'x'; }).join(', '));
+    }
+
+    function decorate(){
+      for (var i = 0; i < rows.length; i++){
+        var r = rows[i];
+        if (r.qty > 1 && r.price){
+          var per  = r.price / r.qty;
+          var save = SINGLE_PRICE * r.qty - r.price;
+          var existing = r.row.querySelector('.tonioli-percopy');
+          if (save > 0.005){
+            if (!existing){
+              var txt = 'Only ' + money(per) + ' per copy \u2014 save ' + money(save) + ' vs. buying separately';
+              var sub = document.createElement('div');
+              sub.className = 'tonioli-percopy';
+              sub.textContent = txt;
+              var anchor = r.row.querySelector('.product-title,[class*="product-title"],.flex-text');
+              if (anchor) anchor.insertAdjacentElement('afterend', sub); else r.row.appendChild(sub);
+              log('per-copy line on', r.qty, 'pack:', txt);
+            }
+          } else if (existing && existing.parentNode){
+            existing.parentNode.removeChild(existing);
+            log('no savings on', r.qty, 'pack \u2014 per-copy line hidden');
+          }
+        }
+        if (r.qty === POPULAR_QTY){
+          if (!r.row.classList.contains('tonioli-popular')){
+            r.row.classList.add('tonioli-popular');
+            var b = document.createElement('div');
+            b.className = 'tonioli-popular-badge';
+            b.textContent = BADGE_TEXT;
+            r.row.appendChild(b);
+            log('highlighted + badged the 3-pack');
+          }
+          popular = r;
+        }
+      }
+    }
+
+    function selectPopular(){
+      if (!popular || userPicked || selecting) return;
+      if (attempts >= 5) { userPicked = true; log('auto-select gave up after 5 attempts'); return; }
+      var input = popular.input;
+      if (input.checked) return;
+      selecting = true; attempts++;
+      log('auto-selecting the 3-pack (attempt ' + attempts + ')');
+      input.click();
+      if (input.type === 'checkbox'){
+        for (var i = 0; i < rows.length; i++){
+          var o = rows[i];
+          if (o !== popular && o.input.checked && o.input.type === 'checkbox' && !isBump(o.input)) o.input.click();
+        }
+      }
+      selecting = false;
+      log('selected \u2192 checked =', input.checked);
+      if (!input.checked) { console.warn('[tonioli] click did not register \u2014 structure dump follows:'); dump(); }
+    }
+
+    function tick(){
+      discover();
+      if (!rows.length){
+        var step2 = document.querySelector('.payment-form-row,.card-details,#card-element');
+        if (step2 && !dumped) { dumped = true; console.warn('[tonioli] step 2 visible but no offer rows recognized \u2014 dumping structure:'); dump(); }
+        return;
+      }
+      decorate();
+      selectPopular();
+    }
+
+    function dump(){
+      var scopes = document.querySelectorAll('.container-order-form-two-step');
+      for (var s = 0; s < scopes.length; s++){
+        var ins = scopes[s].querySelectorAll('input[type=checkbox],input[type=radio]');
+        var shown = 0;
+        for (var i = 0; i < ins.length && shown < 8; i++){
+          if (isBump(ins[i])) continue;
+          shown++;
+          var chain = [], el = ins[i];
+          for (var d = 0; el && d < 6; d++, el = el.parentElement)
+            chain.push(el.tagName.toLowerCase() + (typeof el.className === 'string' && el.className.trim() ? '.' + el.className.trim().split(/\s+/).join('.') : ''));
+          console.log('[tonioli] control #' + i + ' chain: ' + chain.join('  <  '));
+          console.log('[tonioli]   html: ' + ((ins[i].closest('label') || ins[i].parentElement).outerHTML || '').replace(/\s+/g, ' ').slice(0, 250));
+        }
+      }
+    }
+
+    function schedule(){
+      if (timer) return;
+      timer = setTimeout(function () { timer = null; try { tick(); } catch (e) { console.error('[tonioli]', e); } }, 150);
+    }
+
+    function userTouched(ev){
+      if (userPicked || selecting) return;
+      var t = ev.target;
+      if (!t || !t.matches || isBump(t)) return;
+      if (t.matches('input[type=checkbox],input[type=radio]')) { userPicked = true; log('visitor chose an option \u2014 auto-select permanently off'); }
+    }
+
+    if (!document.getElementById('tonioli-v3-style')){
+      var st = document.createElement('style');
+      st.id = 'tonioli-v3-style';
+      st.textContent =
+        '.tonioli-percopy{display:block;font-size:13px;font-weight:700;color:#0174c7;line-height:1.35;margin:4px 0 2px;}' +
+        '@media(max-width:600px){.tonioli-percopy{font-size:12px;}}' +
+        '.tonioli-popular{position:relative!important;overflow:visible!important;border:2px solid #0174c7!important;background:#eef6fd!important;border-radius:8px!important;padding:12px 12px 8px!important;margin-top:16px!important;box-shadow:0 2px 10px rgba(1,116,199,.25)!important;}' +
+        '.tonioli-popular-badge{position:absolute;top:-13px;right:12px;background:#f6804f;color:#fff;font-family:Montserrat,sans-serif;font-size:11px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;padding:4px 12px;border-radius:999px;box-shadow:0 2px 6px rgba(0,0,0,.25);white-space:nowrap;pointer-events:none;z-index:10;}';
+      document.head.appendChild(st);
+    }
+
+    document.addEventListener('click', userTouched, true);
+    document.addEventListener('change', userTouched, true);
+    new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true });
+    setInterval(function () { if (!userPicked) schedule(); }, 1500);
+
+    window.__tonioli = { version: '3.2.0', dump: dump, tick: tick, rows: function () { return rows; }, picked: function () { return userPicked; } };
+    log('v3.2 running \u2014 booted after page load; step 1 untouched.');
+    schedule();
+  }
+
+  /* Boot ONLY after the funnel app is fully up (window load = all
+     scripts executed + hydration done). Safety net at 5s in case a
+     blocked tracker keeps the load event from ever firing. */
+  if (document.readyState === 'complete') safeBoot();
+  else {
+    window.addEventListener('load', safeBoot);
+    setTimeout(safeBoot, 5000);
+  }
+})();
+</script>
